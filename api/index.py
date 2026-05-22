@@ -84,11 +84,13 @@ async def get_recent_games(client: httpx.AsyncClient, player_id: str) -> list[tu
     return games
 
 
-def advance_player(current_idx: int, games: list[tuple[str, bool]]) -> int:
+def advance_player(current_idx: int, games: list[tuple[str, bool]]) -> tuple[int, int]:
     for hero_name, won in games:
         if won and hero_name == HERO_ORDER[current_idx % CYCLE_LEN]:
             current_idx += 1
-    return current_idx
+    current_hero = HERO_ORDER[current_idx % CYCLE_LEN]
+    attempts = sum(1 for hero_name, _ in games if hero_name == current_hero)
+    return current_idx, attempts
 
 
 # --- AHC command handler ---
@@ -107,22 +109,24 @@ async def process_ahc(application_id: str, token: str) -> None:
     lines = []
     for name, result in zip(names, game_lists):
         old_idx = state[name]["hero_index"]
-        new_idx = old_idx if isinstance(result, Exception) else advance_player(old_idx, result)
+        if isinstance(result, Exception):
+            new_idx, attempts = old_idx, 0
+        else:
+            new_idx, attempts = advance_player(old_idx, result)
         if new_idx != old_idx:
             state[name]["hero_index"] = new_idx
             updated = True
         hero = HERO_ORDER[new_idx % CYCLE_LEN]
-        position = (new_idx % CYCLE_LEN) + 1
-        lines.append((name, hero, position, new_idx))
+        lines.append((name, hero, attempts, new_idx))
 
     lines.sort(key=lambda x: x[3], reverse=True)
     fields = [
         {
             "name": name,
-            "value": f"**{hero}** (#{position}/{CYCLE_LEN} · {completed} completed)",
+            "value": f"**{hero}** ({attempts} attempt{'s' if attempts != 1 else ''})",
             "inline": False,
         }
-        for name, hero, position, completed in lines
+        for name, hero, attempts, _ in lines
     ]
     embed = {"title": "All Hero Challenge Progress", "color": 0x9B59B6, "fields": fields}
 
