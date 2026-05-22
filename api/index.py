@@ -33,18 +33,20 @@ CYCLE_LEN = len(HERO_ORDER)
 DISCORD_API = "https://discord.com/api/v10"
 STATE_KEY = "ahc_state"
 
-_PUBLIC_KEY = os.environ["DISCORD_PUBLIC_KEY"]
-_UPSTASH_URL = os.environ["UPSTASH_REDIS_REST_URL"]
-_UPSTASH_TOKEN = os.environ["UPSTASH_REDIS_REST_TOKEN"]
+def _env(key: str) -> str:
+    val = os.environ.get(key)
+    if not val:
+        raise RuntimeError(f"Missing required environment variable: {key}")
+    return val
 
 
 # --- Upstash helpers ---
 
 async def _redis(client: httpx.AsyncClient, *cmd) -> object:
     resp = await client.post(
-        _UPSTASH_URL,
+        _env("UPSTASH_REDIS_REST_URL"),
         json=list(cmd),
-        headers={"Authorization": f"Bearer {_UPSTASH_TOKEN}"},
+        headers={"Authorization": f"Bearer {_env('UPSTASH_REDIS_REST_TOKEN')}"},
     )
     resp.raise_for_status()
     return resp.json()["result"]
@@ -136,7 +138,7 @@ async def process_ahc(application_id: str, token: str) -> None:
 # --- Discord interaction endpoint ---
 
 def _verify(signature: str, timestamp: str, body: bytes) -> None:
-    verify_key = VerifyKey(bytes.fromhex(_PUBLIC_KEY))
+    verify_key = VerifyKey(bytes.fromhex(_env("DISCORD_PUBLIC_KEY")))
     try:
         verify_key.verify(f"{timestamp}{body.decode()}".encode(), bytes.fromhex(signature))
     except BadSignatureError:
