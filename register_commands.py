@@ -22,7 +22,12 @@ COMMANDS = [
         "name": "ahc",
         "description": "Check All Hero Challenge progress for all players",
         "type": 1,
-    }
+    },
+    {
+        "name": "leaderboard",
+        "description": "Show kills/deaths/assists/KDA records across last 10, 50, and all-time games",
+        "type": 1,
+    },
 ]
 
 parser = argparse.ArgumentParser()

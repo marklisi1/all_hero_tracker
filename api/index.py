@@ -33,6 +33,13 @@ CYCLE_LEN = len(HERO_ORDER)
 DISCORD_API = "https://discord.com/api/v10"
 STATE_KEY = "ahc_state"
 
+LEADERBOARD_STATS = [
+    ("kills",   "🗡️ Most Kills",   lambda v: f"{int(v)} kills"),
+    ("deaths",  "💀 Most Deaths",  lambda v: f"{int(v)} deaths"),
+    ("assists", "🤝 Most Assists", lambda v: f"{int(v)} assists"),
+    ("kda",     "⭐ Best KDA",     lambda v: f"{v:.1f} KDA"),
+]
+
 def _env(key: str) -> str:
     val = os.environ.get(key)
     if not val:
@@ -91,6 +98,98 @@ def advance_player(current_idx: int, games: list[tuple[str, bool]]) -> tuple[int
     current_hero = HERO_ORDER[current_idx % CYCLE_LEN]
     attempts = sum(1 for hero_name, _ in games if hero_name == current_hero)
     return current_idx, attempts
+
+
+def _kda(m: dict) -> float:
+    return (m["kills"] + m["assists"]) / max(m["deaths"], 1)
+
+
+def _stat_val(m: dict, stat: str) -> float | None:
+    if stat == "kda":
+        return _kda(m) if all(k in m for k in ("kills", "deaths", "assists")) else None
+    return m.get(stat)
+
+
+async def _fetch_matches(client: httpx.AsyncClient, player_id: str, limit: int = 50) -> list[dict]:
+    resp = await client.get(
+        f"https://api.opendota.com/api/players/{player_id}/matches",
+        params={"limit": limit},
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _find_best(player_matches: dict, stat: str, n: int) -> tuple | None:
+    best_val, best_name, best_hero = None, None, None
+    for name, matches in player_matches.items():
+        for m in matches[:n]:
+            val = _stat_val(m, stat)
+            if val is not None and (best_val is None or val > best_val):
+                best_val, best_name, best_hero = val, name, HERO_MAP.get(m["hero_id"], "Unknown")
+    return (best_name, best_val, best_hero) if best_name else None
+
+
+def _col_text(player_matches: dict, n: int | None, records: dict) -> str:
+    lines = []
+    for stat, label, fmt in LEADERBOARD_STATS:
+        if n is None:
+            rec = records.get(stat)
+            entry = f"**{rec['player']}** — {fmt(rec['value'])} as {rec['hero']}" if rec else "—"
+        else:
+            best = _find_best(player_matches, stat, n)
+            entry = f"**{best[0]}** — {fmt(best[1])} as {best[2]}" if best else "—"
+        lines.append(f"{label}: {entry}")
+    return "\n".join(lines)
+
+
+# --- Leaderboard command handler ---
+
+async def process_leaderboard(application_id: str, token: str) -> None:
+    async with httpx.AsyncClient(timeout=30) as client:
+        state = await load_state(client)
+        names = [name for name in state if name in PLAYER_IDS]
+
+        results = await asyncio.gather(
+            *[_fetch_matches(client, PLAYER_IDS[name]) for name in names],
+            return_exceptions=True,
+        )
+        player_matches = {
+            name: (r if not isinstance(r, Exception) else [])
+            for name, r in zip(names, results)
+        }
+
+        records: dict = state.get("records", {})
+        changed = False
+        for name, matches in player_matches.items():
+            for m in matches:
+                for stat, _, _ in LEADERBOARD_STATS:
+                    val = _stat_val(m, stat)
+                    if val is None:
+                        continue
+                    cur = records.get(stat)
+                    if cur is None or val > cur["value"]:
+                        records[stat] = {
+                            "player": name,
+                            "value": val,
+                            "hero": HERO_MAP.get(m["hero_id"], "Unknown"),
+                            "match_id": m["match_id"],
+                        }
+                        changed = True
+        if changed:
+            state["records"] = records
+            await save_state(client, state)
+
+        fields = [
+            {"name": "Last 10 Games", "value": _col_text(player_matches, 10, records), "inline": False},
+            {"name": "Last 50 Games", "value": _col_text(player_matches, 50, records), "inline": False},
+            {"name": "All Time",      "value": _col_text(player_matches, None, records), "inline": False},
+        ]
+        embed = {"title": "Leaderboard", "color": 0xF1C40F, "fields": fields}
+
+        await client.patch(
+            f"{DISCORD_API}/webhooks/{application_id}/{token}/messages/@original",
+            json={"embeds": [embed]},
+        )
 
 
 # --- AHC command handler ---
@@ -161,8 +260,13 @@ async def interactions(request: Request, background_tasks: BackgroundTasks) -> d
     if data["type"] == 1:  # PING
         return {"type": 1}
 
-    if data["type"] == 2 and data["data"]["name"] == "ahc":
-        background_tasks.add_task(process_ahc, data["application_id"], data["token"])
-        return {"type": 5}  # DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+    if data["type"] == 2:
+        name = data["data"]["name"]
+        if name == "ahc":
+            background_tasks.add_task(process_ahc, data["application_id"], data["token"])
+            return {"type": 5}
+        if name == "leaderboard":
+            background_tasks.add_task(process_leaderboard, data["application_id"], data["token"])
+            return {"type": 5}
 
     raise HTTPException(status_code=400)
