@@ -99,15 +99,22 @@ async def main(dry_run: bool) -> None:
             if not candidates:
                 print(f"  {stat}: no data")
                 continue
-            best = max(candidates, key=lambda r: r["value"])
-            existing = records.get(stat)
-            if existing and existing["value"] >= best["value"]:
-                print(f"  {stat:8s}: keeping existing — {existing['player']} {existing['value']:.2f} as {existing['hero']}")
+            best_val = max(r["value"] for r in candidates)
+            winners = [r for r in candidates if r["value"] == best_val]
+
+            existing = records.get(stat, [])
+            if isinstance(existing, dict):
+                existing = [existing]
+            existing_val = existing[0]["value"] if existing else None
+
+            if existing_val is not None and existing_val > best_val:
+                print(f"  {stat:8s}: keeping existing — {existing[0]['player']} {existing_val:.2f}")
                 new_records[stat] = existing
             else:
-                tag = "(new)" if not existing else f"(was {existing['player']} {existing['value']:.2f})"
-                print(f"  {stat:8s}: {best['player']} — {best['value']:.2f} as {best['hero']}  {tag}")
-                new_records[stat] = best
+                names = " & ".join(f"{r['player']} ({r['hero']})" for r in winners)
+                tag = "(new)" if not existing else f"(was {existing[0]['player']} {existing_val:.2f})"
+                print(f"  {stat:8s}: {names} — {best_val:.2f}  {tag}")
+                new_records[stat] = winners
 
         if dry_run:
             print("\nDry run — nothing written.")

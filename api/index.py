@@ -119,25 +119,50 @@ async def _fetch_matches(client: httpx.AsyncClient, player_id: str, limit: int =
     return resp.json()
 
 
-def _find_best(player_matches: dict, stat: str, n: int) -> tuple | None:
-    best_val, best_name, best_hero = None, None, None
+def _find_best(player_matches: dict, stat: str, n: int) -> list[tuple]:
+    """Returns all (name, val, hero) tuples sharing the best value (ties included)."""
+    best_val: float | None = None
+    bests: list[tuple] = []
     for name, matches in player_matches.items():
         for m in matches[:n]:
             val = _stat_val(m, stat)
-            if val is not None and (best_val is None or val > best_val):
-                best_val, best_name, best_hero = val, name, HERO_MAP.get(m["hero_id"], "Unknown")
-    return (best_name, best_val, best_hero) if best_name else None
+            if val is None:
+                continue
+            if best_val is None or val > best_val:
+                best_val = val
+                bests = [(name, val, HERO_MAP.get(m["hero_id"], "Unknown"))]
+            elif val == best_val:
+                entry = (name, val, HERO_MAP.get(m["hero_id"], "Unknown"))
+                if entry not in bests:
+                    bests.append(entry)
+    return bests
+
+
+def _format_entries(entries: list, fmt) -> str:
+    """Format one or more tied record holders into a display string."""
+    val_str = fmt(entries[0][1] if isinstance(entries[0], tuple) else entries[0]["value"])
+    if len(entries) == 1:
+        e = entries[0]
+        player, hero = (e[0], e[2]) if isinstance(e, tuple) else (e["player"], e["hero"])
+        return f"**{player}** — {val_str} as {hero}"
+    parts = []
+    for e in entries:
+        player, hero = (e[0], e[2]) if isinstance(e, tuple) else (e["player"], e["hero"])
+        parts.append(f"**{player}** ({hero})")
+    return " & ".join(parts) + f" — {val_str}"
 
 
 def _col_text(player_matches: dict, n: int | None, records: dict) -> str:
     lines = []
     for stat, label, fmt in LEADERBOARD_STATS:
         if n is None:
-            rec = records.get(stat)
-            entry = f"**{rec['player']}** — {fmt(rec['value'])} as {rec['hero']}" if rec else "—"
+            recs = records.get(stat, [])
+            if isinstance(recs, dict):  # handle old single-entry format
+                recs = [recs]
+            entry = _format_entries(recs, fmt) if recs else "—"
         else:
-            best = _find_best(player_matches, stat, n)
-            entry = f"**{best[0]}** — {fmt(best[1])} as {best[2]}" if best else "—"
+            bests = _find_best(player_matches, stat, n)
+            entry = _format_entries(bests, fmt) if bests else "—"
         lines.append(f"{label}: {entry}")
     return "\n".join(lines)
 
@@ -166,15 +191,23 @@ async def process_leaderboard(application_id: str, token: str) -> None:
                     val = _stat_val(m, stat)
                     if val is None:
                         continue
-                    cur = records.get(stat)
-                    if cur is None or val > cur["value"]:
-                        records[stat] = {
-                            "player": name,
-                            "value": val,
-                            "hero": HERO_MAP.get(m["hero_id"], "Unknown"),
-                            "match_id": m["match_id"],
-                        }
+                    candidate = {
+                        "player": name,
+                        "value": val,
+                        "hero": HERO_MAP.get(m["hero_id"], "Unknown"),
+                        "match_id": m["match_id"],
+                    }
+                    cur = records.get(stat, [])
+                    if isinstance(cur, dict):
+                        cur = [cur]
+                    best_val = cur[0]["value"] if cur else None
+                    if best_val is None or val > best_val:
+                        records[stat] = [candidate]
                         changed = True
+                    elif val == best_val:
+                        if not any(r["match_id"] == m["match_id"] for r in cur):
+                            records[stat] = cur + [candidate]
+                            changed = True
         if changed:
             state["records"] = records
             await save_state(client, state)
