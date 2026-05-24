@@ -33,12 +33,25 @@ CYCLE_LEN = len(HERO_ORDER)
 DISCORD_API = "https://discord.com/api/v10"
 STATE_KEY = "ahc_state"
 
-LEADERBOARD_STATS = [
+BASIC_STATS = [
     ("kills",   "🗡️ Most Kills",   lambda v: f"{int(v)} kills"),
     ("deaths",  "💀 Most Deaths",  lambda v: f"{int(v)} deaths"),
     ("assists", "🤝 Most Assists", lambda v: f"{int(v)} assists"),
     ("kda",     "⭐ Best KDA",     lambda v: f"{v:.1f} KDA"),
 ]
+
+SORT_STATS = [
+    ("gold_per_min",    "💰 Best GPM",       lambda v: f"{int(v):,} GPM"),
+    ("xp_per_min",      "✨ Best XPM",       lambda v: f"{int(v):,} XPM"),
+    ("hero_damage",     "⚔️ Hero Damage",    lambda v: f"{int(v):,} dmg"),
+    ("tower_damage",    "🏰 Tower Damage",   lambda v: f"{int(v):,} dmg"),
+    ("hero_healing",    "💚 Hero Healing",   lambda v: f"{int(v):,} healed"),
+    ("obs_placed",      "👁️ Obs Placed",     lambda v: f"{int(v)} obs"),
+    ("sen_placed",      "🔵 Sentries",       lambda v: f"{int(v)} sentries"),
+    ("smoke_of_deceit", "💨 Smokes",         lambda v: f"{int(v)} smokes"),
+]
+
+ALL_STATS = BASIC_STATS + SORT_STATS
 
 def _env(key: str) -> str:
     val = os.environ.get(key)
@@ -107,6 +120,9 @@ def _kda(m: dict) -> float:
 def _stat_val(m: dict, stat: str) -> float | None:
     if stat == "kda":
         return _kda(m) if all(k in m for k in ("kills", "deaths", "assists")) else None
+    if stat == "smoke_of_deceit":
+        val = (m.get("purchase") or {}).get("smoke_of_deceit")
+        return float(val) if val else None
     return m.get(stat)
 
 
@@ -119,105 +135,188 @@ async def _fetch_matches(client: httpx.AsyncClient, player_id: str, limit: int =
     return resp.json()
 
 
-def _find_best(player_matches: dict, stat: str, n: int) -> list[tuple]:
-    """Returns all (name, val, hero) tuples sharing the best value (ties included)."""
+async def _fetch_full_match(client: httpx.AsyncClient, match_id: int) -> dict:
+    resp = await client.get(f"https://api.opendota.com/api/matches/{match_id}")
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _extract_player(match: dict, account_id: str) -> dict | None:
+    for p in match.get("players", []):
+        if str(p.get("account_id")) == account_id:
+            return p
+    return None
+
+
+def _apply_candidate(records: dict, stat: str, candidate: dict) -> bool:
+    """Insert candidate into records[stat] if it ties or beats the current best. Returns True if changed."""
+    cur = records.get(stat, [])
+    if isinstance(cur, dict):
+        cur = [cur]
+    best_val = cur[0]["value"] if cur else None
+    if best_val is None or candidate["value"] > best_val:
+        records[stat] = [candidate]
+        return True
+    if candidate["value"] == best_val and not any(r["match_id"] == candidate["match_id"] for r in cur):
+        records[stat] = cur + [candidate]
+        return True
+    return False
+
+
+def _is_turbo(m: dict) -> bool:
+    return m.get("game_mode") == 23
+
+
+def _find_best(ranked_matches: dict, stat: str, n: int) -> list[dict]:
+    """Returns all record dicts sharing the best value across the first n matches per player."""
     best_val: float | None = None
-    bests: list[tuple] = []
-    for name, matches in player_matches.items():
+    bests: list[dict] = []
+    for name, matches in ranked_matches.items():
         for m in matches[:n]:
             val = _stat_val(m, stat)
             if val is None:
                 continue
+            entry = {"player": name, "value": val,
+                     "hero": HERO_MAP.get(m["hero_id"], "Unknown"), "match_id": m["match_id"]}
             if best_val is None or val > best_val:
                 best_val = val
-                bests = [(name, val, HERO_MAP.get(m["hero_id"], "Unknown"))]
+                bests = [entry]
             elif val == best_val:
-                entry = (name, val, HERO_MAP.get(m["hero_id"], "Unknown"))
-                if entry not in bests:
+                if not any(r["match_id"] == m["match_id"] for r in bests):
                     bests.append(entry)
     return bests
 
 
-def _format_entries(entries: list, fmt) -> str:
-    """Format one or more tied record holders into a display string."""
-    val_str = fmt(entries[0][1] if isinstance(entries[0], tuple) else entries[0]["value"])
+def _format_entries(entries: list[dict], fmt) -> str:
+    val_str = fmt(entries[0]["value"])
     if len(entries) == 1:
-        e = entries[0]
-        player, hero = (e[0], e[2]) if isinstance(e, tuple) else (e["player"], e["hero"])
-        return f"**{player}** — {val_str} as {hero}"
-    parts = []
-    for e in entries:
-        player, hero = (e[0], e[2]) if isinstance(e, tuple) else (e["player"], e["hero"])
-        parts.append(f"**{player}** ({hero})")
+        return f"**{entries[0]['player']}** — {val_str} as {entries[0]['hero']}"
+    parts = [f"**{e['player']}** ({e['hero']})" for e in entries]
     return " & ".join(parts) + f" — {val_str}"
 
 
-def _col_text(player_matches: dict, n: int | None, records: dict) -> str:
+def _col_text(ranked_matches: dict, timeframe: str, records: dict) -> str:
+    n = {"last10": 10, "last50": 50, "alltime": None}[timeframe]
+    tf_records = records.get(timeframe, {})
     lines = []
-    for stat, label, fmt in LEADERBOARD_STATS:
-        if n is None:
-            recs = records.get(stat, [])
-            if isinstance(recs, dict):  # handle old single-entry format
+    for stat, label, fmt in ALL_STATS:
+        is_basic = any(stat == s for s, _, _ in BASIC_STATS)
+        if n is not None and is_basic:
+            # Always computed fresh from the ranked match list
+            bests = _find_best(ranked_matches, stat, n)
+            entry = _format_entries(bests, fmt) if bests else "—"
+        else:
+            recs = tf_records.get(stat, [])
+            if isinstance(recs, dict):
                 recs = [recs]
             entry = _format_entries(recs, fmt) if recs else "—"
-        else:
-            bests = _find_best(player_matches, stat, n)
-            entry = _format_entries(bests, fmt) if bests else "—"
         lines.append(f"{label}: {entry}")
     return "\n".join(lines)
 
 
 # --- Leaderboard command handler ---
 
-async def process_leaderboard(application_id: str, token: str) -> None:
+async def process_leaderboard(application_id: str, token: str, timeframe: str) -> None:
     async with httpx.AsyncClient(timeout=30) as client:
         state = await load_state(client)
         names = [name for name in state if name in PLAYER_IDS]
+        last_seen: dict = state.get("last_seen", {})
 
-        results = await asyncio.gather(
+        # Fetch recent match list for all players (all game modes — needed for last_seen tracking)
+        list_results = await asyncio.gather(
             *[_fetch_matches(client, PLAYER_IDS[name]) for name in names],
             return_exceptions=True,
         )
         player_matches = {
             name: (r if not isinstance(r, Exception) else [])
-            for name, r in zip(names, results)
+            for name, r in zip(names, list_results)
+        }
+
+        # Non-turbo view used for display and basic-stat record updates
+        ranked_matches = {
+            name: [m for m in matches if not _is_turbo(m)]
+            for name, matches in player_matches.items()
+        }
+
+        # New non-turbo match IDs per player since last_seen (turbo advances last_seen but isn't fetched)
+        new_per_player: dict[str, list[int]] = {
+            name: [
+                m["match_id"] for m in matches
+                if m["match_id"] > last_seen[name] and not _is_turbo(m)
+            ]
+            for name, matches in player_matches.items()
+            if last_seen.get(name) is not None
+        }
+
+        # Deduplicate across players — friends often share the same matches
+        unique_new_ids = list({mid for ids in new_per_player.values() for mid in ids})
+
+        full_results = await asyncio.gather(
+            *[_fetch_full_match(client, mid) for mid in unique_new_ids],
+            return_exceptions=True,
+        )
+        match_by_id: dict[int, dict] = {
+            mid: result
+            for mid, result in zip(unique_new_ids, full_results)
+            if not isinstance(result, Exception)
         }
 
         records: dict = state.get("records", {})
         changed = False
-        for name, matches in player_matches.items():
+
+        # Update alltime BASIC_STATS from ranked match list (free — already fetched)
+        alltime = records.setdefault("alltime", {})
+        for name, matches in ranked_matches.items():
             for m in matches:
-                for stat, _, _ in LEADERBOARD_STATS:
+                for stat, _, _ in BASIC_STATS:
                     val = _stat_val(m, stat)
                     if val is None:
                         continue
-                    candidate = {
-                        "player": name,
-                        "value": val,
-                        "hero": HERO_MAP.get(m["hero_id"], "Unknown"),
-                        "match_id": m["match_id"],
-                    }
-                    cur = records.get(stat, [])
-                    if isinstance(cur, dict):
-                        cur = [cur]
-                    best_val = cur[0]["value"] if cur else None
-                    if best_val is None or val > best_val:
-                        records[stat] = [candidate]
+                    if _apply_candidate(alltime, stat, {"player": name, "value": val,
+                                                         "hero": HERO_MAP.get(m["hero_id"], "Unknown"),
+                                                         "match_id": m["match_id"]}):
                         changed = True
-                    elif val == best_val:
-                        if not any(r["match_id"] == m["match_id"] for r in cur):
-                            records[stat] = cur + [candidate]
+
+        # Update ALL_STATS across all timeframes from full match data (new non-turbo games only)
+        for name, new_ids in new_per_player.items():
+            for mid in new_ids:
+                full = match_by_id.get(mid)
+                if full is None:
+                    continue
+                pdata = _extract_player(full, PLAYER_IDS[name])
+                if pdata is None:
+                    continue
+                hero = HERO_MAP.get(pdata.get("hero_id"), "Unknown")
+                for tf in ("last10", "last50", "alltime"):
+                    tf_records = records.setdefault(tf, {})
+                    for stat, _, _ in ALL_STATS:
+                        val = _stat_val(pdata, stat)
+                        if val is None:
+                            continue
+                        if _apply_candidate(tf_records, stat, {
+                            "player": name, "value": val, "hero": hero, "match_id": mid,
+                        }):
                             changed = True
+
+        # Advance last_seen using all matches including turbo
+        new_last_seen = {**last_seen}
+        for name, matches in player_matches.items():
+            if matches:
+                new_last_seen[name] = matches[0]["match_id"]
+        if new_last_seen != last_seen:
+            changed = True
+
         if changed:
             state["records"] = records
+            state["last_seen"] = new_last_seen
             await save_state(client, state)
 
-        fields = [
-            {"name": "Last 10 Games", "value": _col_text(player_matches, 10, records), "inline": False},
-            {"name": "Last 50 Games", "value": _col_text(player_matches, 50, records), "inline": False},
-            {"name": "All Time",      "value": _col_text(player_matches, None, records), "inline": False},
-        ]
-        embed = {"title": "Leaderboard", "color": 0xF1C40F, "fields": fields}
+        title_map = {"last10": "Last 10 Games", "last50": "Last 50 Games", "alltime": "All Time"}
+        embed = {
+            "title": f"Leaderboard — {title_map[timeframe]}",
+            "description": _col_text(ranked_matches, timeframe, records),
+            "color": 0xF1C40F,
+        }
 
         await client.patch(
             f"{DISCORD_API}/webhooks/{application_id}/{token}/messages/@original",
@@ -298,8 +397,9 @@ async def interactions(request: Request, background_tasks: BackgroundTasks) -> d
         if name == "ahc":
             background_tasks.add_task(process_ahc, data["application_id"], data["token"])
             return {"type": 5}
-        if name == "leaderboard":
-            background_tasks.add_task(process_leaderboard, data["application_id"], data["token"])
+        if name in ("l10", "l50", "alltime"):
+            tf = {"l10": "last10", "l50": "last50", "alltime": "alltime"}[name]
+            background_tasks.add_task(process_leaderboard, data["application_id"], data["token"], tf)
             return {"type": 5}
 
     raise HTTPException(status_code=400)

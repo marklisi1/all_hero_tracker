@@ -24,8 +24,18 @@ COMMANDS = [
         "type": 1,
     },
     {
-        "name": "leaderboard",
-        "description": "Show kills/deaths/assists/KDA records across last 10, 50, and all-time games",
+        "name": "l10",
+        "description": "Leaderboard — best stats across each player's last 10 non-turbo games",
+        "type": 1,
+    },
+    {
+        "name": "l50",
+        "description": "Leaderboard — best stats across each player's last 50 non-turbo games",
+        "type": 1,
+    },
+    {
+        "name": "alltime",
+        "description": "Leaderboard — all-time best stats (non-turbo)",
         "type": 1,
     },
 ]

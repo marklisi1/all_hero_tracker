@@ -32,7 +32,7 @@ PLAYER_IDS = {
     "Matt": "109323944",
     "Mike": "76342551",
 }
-STATS = ["kills", "deaths", "assists", "kda"]
+STATS = ["kills", "deaths", "assists", "kda", "gold_per_min", "xp_per_min", "hero_damage", "tower_damage", "hero_healing"]
 STATE_KEY = "ahc_state"
 
 
