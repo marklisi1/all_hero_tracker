@@ -35,8 +35,8 @@ PLAYER_IDS = {
 }
 STATE_KEY = "ahc_state"
 CACHE_SIZE = 50
-BATCH_SIZE = 10
-BATCH_SLEEP = 20  # seconds — 10 req per 20s = 30 req/min, safely under 60/min free tier
+BATCH_SIZE = 5
+BATCH_SLEEP = 12  # seconds — 5 req per 12s = 25 req/min; smaller batches avoid burst detection
 
 
 async def _redis(client: httpx.AsyncClient, *cmd) -> object:
@@ -97,17 +97,28 @@ async def main(dry_run: bool) -> None:
             player_matches[name] = non_turbo
             print(f"  {name}: {len(non_turbo)} non-turbo matches")
 
-        # Collect unique match IDs across all players
+        # Load existing cache so we can skip already-fetched match IDs
+        existing_cache: dict[str, list] = state.get("match_cache", {})
+        already_cached: set[int] = {
+            e["match_id"]
+            for entries in existing_cache.values()
+            for e in entries
+        }
+
+        # Collect unique match IDs that still need fetching
         all_ids: set[int] = set()
         for matches in player_matches.values():
             all_ids.update(m["match_id"] for m in matches)
-        unique_ids = sorted(all_ids, reverse=True)
+        unique_ids = sorted(all_ids - already_cached, reverse=True)
 
-        n_batches = (len(unique_ids) + BATCH_SIZE - 1) // BATCH_SIZE
-        est_min = n_batches * BATCH_SLEEP // 60
-        print(f"\n{len(unique_ids)} unique match IDs across all players.")
-        print(f"Fetching in batches of {BATCH_SIZE} with {BATCH_SLEEP}s sleep (~{30} req/min).")
-        print(f"Estimated time: ~{est_min}-{est_min + 2} minutes\n")
+        print(f"\n{len(all_ids)} unique match IDs total, {len(already_cached)} already cached, "
+              f"{len(unique_ids)} to fetch.")
+
+        if unique_ids:
+            n_batches = (len(unique_ids) + BATCH_SIZE - 1) // BATCH_SIZE
+            est_min = n_batches * BATCH_SLEEP // 60
+            print(f"Fetching in batches of {BATCH_SIZE} with {BATCH_SLEEP}s sleep (~25 req/min).")
+            print(f"Estimated time: ~{est_min}-{est_min + 2} minutes\n")
 
         # Fetch full match data in rate-limited batches
         match_by_id: dict[int, dict] = {}
@@ -137,21 +148,23 @@ async def main(dry_run: bool) -> None:
 
         print(f"\nFetched {len(match_by_id)}/{len(unique_ids)} matches successfully.")
 
-        # Build cache per player (newest first, capped at CACHE_SIZE)
+        # Build cache per player — merge new entries with existing cache
         print("\nBuilding cache entries...")
         match_cache: dict[str, list] = {}
         for name, matches in player_matches.items():
-            entries = []
+            existing_entries = {e["match_id"]: e for e in existing_cache.get(name, [])}
             for m in matches:
                 mid = m["match_id"]
+                if mid in existing_entries:
+                    continue
                 full = match_by_id.get(mid)
                 if full is None:
                     continue
                 pdata = _extract_player(full, PLAYER_IDS[name])
                 if pdata is None:
                     continue
-                entries.append(_extract_cache_entry(pdata, mid))
-            entries.sort(key=lambda e: e["match_id"], reverse=True)
+                existing_entries[mid] = _extract_cache_entry(pdata, mid)
+            entries = sorted(existing_entries.values(), key=lambda e: e["match_id"], reverse=True)[:CACHE_SIZE]
             match_cache[name] = entries
             print(f"  {name}: {len(entries)} cache entries")
 
