@@ -1,24 +1,4 @@
 {
-  "last10": {
-    "gold_per_min":    {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "xp_per_min":      {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "hero_damage":     {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "tower_damage":    {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "hero_healing":    {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "obs_placed":      {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "sen_placed":      {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "smoke_of_deceit": {"player": "", "value": 0, "hero": "", "match_id": 0}
-  },
-  "last50": {
-    "gold_per_min":    {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "xp_per_min":      {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "hero_damage":     {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "tower_damage":    {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "hero_healing":    {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "obs_placed":      {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "sen_placed":      {"player": "", "value": 0, "hero": "", "match_id": 0},
-    "smoke_of_deceit": {"player": "", "value": 0, "hero": "", "match_id": 0}
-  },
   "alltime": {
     "kills":           {"player": "", "value": 0,   "hero": "", "match_id": 0},
     "deaths":          {"player": "", "value": 0,   "hero": "", "match_id": 0},

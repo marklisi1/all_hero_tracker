@@ -121,7 +121,8 @@ def _stat_val(m: dict, stat: str) -> float | None:
     if stat == "kda":
         return _kda(m) if all(k in m for k in ("kills", "deaths", "assists")) else None
     if stat == "smoke_of_deceit":
-        val = (m.get("purchase") or {}).get("smoke_of_deceit")
+        # Cache entries store this flat; full match pdata nests it under purchase
+        val = m.get("smoke_of_deceit") or (m.get("purchase") or {}).get("smoke_of_deceit")
         return float(val) if val else None
     return m.get(stat)
 
@@ -146,6 +147,15 @@ def _extract_player(match: dict, account_id: str) -> dict | None:
         if str(p.get("account_id")) == account_id:
             return p
     return None
+
+
+def _extract_cache_entry(pdata: dict) -> dict:
+    entry: dict = {"match_id": pdata["match_id"], "hero_id": pdata.get("hero_id")}
+    for stat in ("kills", "deaths", "assists", "gold_per_min", "xp_per_min",
+                 "hero_damage", "tower_damage", "hero_healing", "obs_placed", "sen_placed"):
+        entry[stat] = pdata.get(stat)
+    entry["smoke_of_deceit"] = (pdata.get("purchase") or {}).get("smoke_of_deceit")
+    return entry
 
 
 def _apply_candidate(records: dict, stat: str, candidate: dict) -> bool:
@@ -195,18 +205,15 @@ def _format_entries(entries: list[dict], fmt) -> str:
     return " & ".join(parts) + f" — {val_str}"
 
 
-def _col_text(ranked_matches: dict, timeframe: str, records: dict) -> str:
+def _col_text(cache_by_player: dict, timeframe: str, records: dict) -> str:
     n = {"last10": 10, "last50": 50, "alltime": None}[timeframe]
-    tf_records = records.get(timeframe, {})
     lines = []
     for stat, label, fmt in ALL_STATS:
-        is_basic = any(stat == s for s, _, _ in BASIC_STATS)
-        if n is not None and is_basic:
-            # Always computed fresh from the ranked match list
-            bests = _find_best(ranked_matches, stat, n)
+        if n is not None:
+            bests = _find_best(cache_by_player, stat, n)
             entry = _format_entries(bests, fmt) if bests else "—"
         else:
-            recs = tf_records.get(stat, [])
+            recs = records.get("alltime", {}).get(stat, [])
             if isinstance(recs, dict):
                 recs = [recs]
             entry = _format_entries(recs, fmt) if recs else "—"
@@ -262,6 +269,7 @@ async def process_leaderboard(application_id: str, token: str, timeframe: str) -
         }
 
         records: dict = state.get("records", {})
+        match_cache: dict = state.get("match_cache", {})
         changed = False
 
         # Update alltime BASIC_STATS from ranked match list (free — already fetched)
@@ -277,8 +285,11 @@ async def process_leaderboard(application_id: str, token: str, timeframe: str) -
                                                          "match_id": m["match_id"]}):
                         changed = True
 
-        # Update ALL_STATS across all timeframes from full match data (new non-turbo games only)
+        # Update alltime ALL_STATS + match cache from full match data (new non-turbo games only)
         for name, new_ids in new_per_player.items():
+            player_cache = list(match_cache.get(name, []))
+            cached_ids = {e["match_id"] for e in player_cache}
+            new_entries = []
             for mid in new_ids:
                 full = match_by_id.get(mid)
                 if full is None:
@@ -287,16 +298,21 @@ async def process_leaderboard(application_id: str, token: str, timeframe: str) -
                 if pdata is None:
                     continue
                 hero = HERO_MAP.get(pdata.get("hero_id"), "Unknown")
-                for tf in ("last10", "last50", "alltime"):
-                    tf_records = records.setdefault(tf, {})
-                    for stat, _, _ in ALL_STATS:
-                        val = _stat_val(pdata, stat)
-                        if val is None:
-                            continue
-                        if _apply_candidate(tf_records, stat, {
-                            "player": name, "value": val, "hero": hero, "match_id": mid,
-                        }):
-                            changed = True
+                for stat, _, _ in ALL_STATS:
+                    val = _stat_val(pdata, stat)
+                    if val is None:
+                        continue
+                    if _apply_candidate(alltime, stat, {
+                        "player": name, "value": val, "hero": hero, "match_id": mid,
+                    }):
+                        changed = True
+                if mid not in cached_ids:
+                    new_entries.append(_extract_cache_entry(pdata))
+            if new_entries:
+                combined = new_entries + player_cache
+                combined.sort(key=lambda e: e["match_id"], reverse=True)
+                match_cache[name] = combined[:50]
+                changed = True
 
         # Advance last_seen using all matches including turbo
         new_last_seen = {**last_seen}
@@ -308,13 +324,15 @@ async def process_leaderboard(application_id: str, token: str, timeframe: str) -
 
         if changed:
             state["records"] = records
+            state["match_cache"] = match_cache
             state["last_seen"] = new_last_seen
             await save_state(client, state)
 
+        cache_by_player = {name: match_cache.get(name, []) for name in names}
         title_map = {"last10": "Last 10 Games", "last50": "Last 50 Games", "alltime": "All Time"}
         embed = {
             "title": f"Leaderboard — {title_map[timeframe]}",
-            "description": _col_text(ranked_matches, timeframe, records),
+            "description": _col_text(cache_by_player, timeframe, records),
             "color": 0xF1C40F,
         }
 
