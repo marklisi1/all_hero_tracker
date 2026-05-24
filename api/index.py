@@ -89,7 +89,7 @@ async def save_state(client: httpx.AsyncClient, state: dict) -> None:
 async def get_recent_games(client: httpx.AsyncClient, player_id: str) -> list[tuple[str, bool]]:
     resp = await client.get(
         f"https://api.opendota.com/api/players/{player_id}/matches",
-        params={"limit": 50},
+        params={"limit": 50, "significant": 0},
     )
     resp.raise_for_status()
     games = []
@@ -149,8 +149,8 @@ def _extract_player(match: dict, account_id: str) -> dict | None:
     return None
 
 
-def _extract_cache_entry(pdata: dict) -> dict:
-    entry: dict = {"match_id": pdata["match_id"], "hero_id": pdata.get("hero_id")}
+def _extract_cache_entry(pdata: dict, match_id: int) -> dict:
+    entry: dict = {"match_id": match_id, "hero_id": pdata.get("hero_id")}
     for stat in ("kills", "deaths", "assists", "gold_per_min", "xp_per_min",
                  "hero_damage", "tower_damage", "hero_healing", "obs_placed", "sen_placed"):
         entry[stat] = pdata.get(stat)
@@ -307,7 +307,7 @@ async def process_leaderboard(application_id: str, token: str, timeframe: str) -
                     }):
                         changed = True
                 if mid not in cached_ids:
-                    new_entries.append(_extract_cache_entry(pdata))
+                    new_entries.append(_extract_cache_entry(pdata, mid))
             if new_entries:
                 combined = new_entries + player_cache
                 combined.sort(key=lambda e: e["match_id"], reverse=True)

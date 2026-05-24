@@ -1,16 +1,16 @@
 {
   "alltime": {
-    "kills":           {"player": "", "value": 0,   "hero": "", "match_id": 0},
-    "deaths":          {"player": "", "value": 0,   "hero": "", "match_id": 0},
-    "assists":         {"player": "", "value": 0,   "hero": "", "match_id": 0},
-    "kda":             {"player": "", "value": 0.0, "hero": "", "match_id": 0},
-    "gold_per_min":    {"player": "", "value": 0,   "hero": "", "match_id": 0},
-    "xp_per_min":      {"player": "", "value": 0,   "hero": "", "match_id": 0},
-    "hero_damage":     {"player": "", "value": 0,   "hero": "", "match_id": 0},
-    "tower_damage":    {"player": "", "value": 0,   "hero": "", "match_id": 0},
-    "hero_healing":    {"player": "", "value": 0,   "hero": "", "match_id": 0},
-    "obs_placed":      {"player": "", "value": 0,   "hero": "", "match_id": 0},
-    "sen_placed":      {"player": "", "value": 0,   "hero": "", "match_id": 0},
+    "kills":           {"player": "Mark", "value": 45,   "hero": "Weaver", "match_id": 8610052980},
+    "deaths":          {"player": "Mark", "value": 0,   "hero": "", "match_id": 0},
+    "assists":         {"player": "Mark", "value": 57,   "hero": "", "match_id": 0},
+    "kda":             {"player": "Mark", "value": 0.0, "hero": "", "match_id": 0},
+    "gold_per_min":    {"player": "Mark", "value": 1166,   "hero": "Alchemist", "match_id": 1841028850},
+    "xp_per_min":      {"player": "Mark", "value": 1428,   "hero": "Phantom Assassin", "match_id": 8812628278},
+    "hero_damage":     {"player": "Eric", "value": 207036,   "hero": "Monkey King", "match_id": 0},
+    "tower_damage":    {"player": "Mark", "value": 29355,   "hero": "Anti-Mage", "match_id": 7647207932},
+    "hero_healing":    {"player": "Mark", "value": 50764,   "hero": "Dazzle", "match_id": 7476210630},
+    "obs_placed":      {"player": "Eric", "value": 32,   "hero": "Rubick", "match_id": 5672462795},
+    "sen_placed":      {"player": "Mike", "value": 56,   "hero": "Dazzle", "match_id": 5610327068},
     "smoke_of_deceit": {"player": "", "value": 0,   "hero": "", "match_id": 0}
   }
 }

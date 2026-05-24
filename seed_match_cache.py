@@ -60,8 +60,8 @@ def _extract_player(match: dict, account_id: str) -> dict | None:
     return None
 
 
-def _extract_cache_entry(pdata: dict) -> dict:
-    entry: dict = {"match_id": pdata["match_id"], "hero_id": pdata.get("hero_id")}
+def _extract_cache_entry(pdata: dict, match_id: int) -> dict:
+    entry: dict = {"match_id": match_id, "hero_id": pdata.get("hero_id")}
     for stat in ("kills", "deaths", "assists", "gold_per_min", "xp_per_min",
                  "hero_damage", "tower_damage", "hero_healing", "obs_placed", "sen_placed"):
         entry[stat] = pdata.get(stat)
@@ -150,7 +150,7 @@ async def main(dry_run: bool) -> None:
                 pdata = _extract_player(full, PLAYER_IDS[name])
                 if pdata is None:
                     continue
-                entries.append(_extract_cache_entry(pdata))
+                entries.append(_extract_cache_entry(pdata, mid))
             entries.sort(key=lambda e: e["match_id"], reverse=True)
             match_cache[name] = entries
             print(f"  {name}: {len(entries)} cache entries")
